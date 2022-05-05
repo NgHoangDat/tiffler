@@ -1,4 +1,5 @@
 import re
+from functools import lru_cache
 from typing import *
 
 
@@ -12,9 +13,11 @@ class Tiffler:
         self.vars = []
 
         matches = []
-        for match in re.finditer(r"(?<=[^\\]\{)[a-zA-Z_]\w*(?=\})", self.template):
+        for match in re.finditer(
+            r"(?<=[^\\]\{)(\?|([a-zA-Z_]\w*))(?=\})", self.template
+        ):
             val = match.group()
-            if val.isidentifier():
+            if val.isidentifier() or val == "?":
                 assert val not in self.vars, f"Duplicate var name {val} found"
                 self.vars.append(val)
                 matches.append(match)
@@ -34,9 +37,9 @@ class Tiffler:
             start_idx = curr_match.end() + 1
 
             if self.case_sensitive:
-                expr = re.compile(rf"{prefix}.*{suffix}")
+                expr = re.compile(rf"{prefix}.*?{suffix}")
             else:
-                expr = re.compile(rf"{prefix}.*{suffix}", re.IGNORECASE)
+                expr = re.compile(rf"{prefix}.*?{suffix}", re.IGNORECASE)
 
             self.exprs.append(expr)
 
@@ -52,7 +55,21 @@ class Tiffler:
             if var_name in types:
                 var_value = types[var_name](var_value)
 
-            result[var_name] = var_value
+            if var_name != "?":
+                result[var_name] = var_value
+
             curr = curr[match.end() :]
 
         return result
+
+
+@lru_cache(typed=True)
+def compile(template: str, case_sensitive: bool = False, **kwargs) -> Tiffler:
+    return Tiffler(template, case_sensitive=case_sensitive, **kwargs)
+
+
+def scan(
+    template: str, text: str, case_sensitive: bool = False, /, **types
+) -> Dict[str, Type]:
+    tiffler = compile(template, case_sensitive=case_sensitive)
+    return tiffler.scan(text, **types)
