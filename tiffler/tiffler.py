@@ -1,66 +1,75 @@
 import re
+from collections import OrderedDict
 from functools import lru_cache
 from typing import *
+
+SUPPORTED_TYPES = {
+    "float": "[-+]?\d*\.\d+|\d+",
+    "int": "[-+]?\d+",
+    "bool": "true|True|false|False|0|1",
+    "str": ".+",
+}
+
+__all__ = ["Tiffler", "compile", "scan", "search"]
 
 
 class Tiffler:
     def __init__(self, template: str, case_sensitive: bool = True, **kwargs):
-        self.template = template
         self.case_sensitive = case_sensitive
-        self.build()
+        self.build(template)
 
-    def build(self):
-        self.vars = []
+    def build(self, template: str):
+        self.vars = OrderedDict()
+        expr = (
+            r"((?<=[^\\]\{)(\?|([a-zA-Z_]\w*.*?))(?=\}))"
+            "|(?<=^\{)(\?|([a-zA-Z_]\w*.*?))(?=\})"
+        )
 
-        matches = []
-        for match in re.finditer(
-            r"(?<=[^\\]\{)(\?|([a-zA-Z_]\w*))(?=\})", self.template
-        ):
-            val = match.group()
-            if val.isidentifier() or val == "?":
-                assert val not in self.vars, f"Duplicate var name {val} found"
-                self.vars.append(val)
-                matches.append(match)
+        self.template = ""
+        curr_idx = 0
+        for match in re.finditer(expr, template):
+            var_name, var_type, var_expr, *_ = match.group().split(":") + [None, None]
+            if var_name.isidentifier():
+                assert var_name not in self.vars, f"Duplicate var name {var_name} found"
 
-        self.exprs = []
-        start_idx = 0
-        for i, curr_match in enumerate(matches):
-            end_idx = len(self.template)
-            if i < len(matches) - 1:
-                next_match = matches[i + 1]
-                end_idx = next_match.start() - 1
+                if var_type is None:
+                    var_type = "str"
 
-            prefix = (
-                rf"(?<={re.escape(self.template[start_idx:curr_match.start() - 1])})"
-            )
-            suffix = rf"(?={re.escape(self.template[curr_match.end() + 1:end_idx])})"
-            start_idx = curr_match.end() + 1
+                if var_expr is None:
+                    var_expr = SUPPORTED_TYPES.get(var_type, ".+")
 
-            if self.case_sensitive:
-                expr = re.compile(rf"{prefix}.*?{suffix}")
-            else:
-                expr = re.compile(rf"{prefix}.*?{suffix}", re.IGNORECASE)
+                assert var_type in SUPPORTED_TYPES, f"Type {var_type} is not supported"
+                var_type = eval(var_type)
 
-            self.exprs.append(expr)
+                self.template += (
+                    template[curr_idx : match.start() - 1] + rf"({var_expr})"
+                )
+                curr_idx = match.end() + 1
+                self.vars[var_name] = var_type
 
-    def scan(self, text: str, /, **types: Dict[str, Type]) -> Dict[str, Any]:
-        curr = text
+        self.template += template[curr_idx:]
+        if self.case_sensitive:
+            self.expr = re.compile(self.template)
+        else:
+            self.expr = re.compile(self.template, re.IGNORECASE)
+
+    def scan(self, text: str, /, **kwargs) -> Dict[str, Any]:
+        match = self.expr.match(text)
         result = {}
-        for var_name, expr in zip(self.vars, self.exprs):
-            match = expr.search(curr)
-            if match is None:
-                return None
 
-            var_value = match.group()
-            if var_name in types:
-                var_value = types[var_name](var_value)
-
-            if var_name != "?":
-                result[var_name] = var_value
-
-            curr = curr[match.end() :]
+        if match:
+            for val, (key, dtype) in zip(match.groups(), self.vars.items()):
+                result[key] = dtype(val)
 
         return result
+
+    def search(self, text: str, /, **kwargs) -> Iterator[Dict[str, Any]]:
+        for match in self.expr.finditer(text):
+            result = {}
+            for val, (key, dtype) in zip(match.groups(), self.vars.items()):
+                result[key] = dtype(val)
+
+            yield result
 
 
 @lru_cache(typed=True)
@@ -69,7 +78,14 @@ def compile(template: str, case_sensitive: bool = False, **kwargs) -> Tiffler:
 
 
 def scan(
-    template: str, text: str, case_sensitive: bool = False, /, **types
-) -> Dict[str, Type]:
+    template: str, text: str, case_sensitive: bool = False, /, **kwargs
+) -> Dict[str, Any]:
     tiffler = compile(template, case_sensitive=case_sensitive)
-    return tiffler.scan(text, **types)
+    return tiffler.scan(text, **kwargs)
+
+
+def search(
+    template: str, text: str, case_sensitive: bool = False, /, **kwargs
+) -> Iterator[Dict[str, Any]]:
+    tiffler = compile(template, case_sensitive=case_sensitive)
+    return tiffler.search(text, **kwargs)

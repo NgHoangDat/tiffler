@@ -20,7 +20,7 @@ for path in glob("requirements.*.txt"):
         mode = match.group(0)
         extras_require[mode] = read_requirements(path)
 
-__VERSION__ = "0.1.1"
+__VERSION__ = "0.1.6"
 __DESCRIPTION__ = "This Niffler finds shiny variables in text"
 
 
