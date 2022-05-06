@@ -1,6 +1,6 @@
 # Tiffler
 
-> A Niffler that only likes shiny variable
+> A Niffler that only likes shiny variables
 
 ## Installation
 
